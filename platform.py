@@ -22,3 +22,61 @@ class Espressif32Platform(PlatformBase):
             self.packages['toolchain-xtensa32']['version'] = "~2.50200.0"
         return PlatformBase.configure_default_packages(
             self, variables, targets)
+
+    def get_boards(self, id_=None):
+        result = PlatformBase.get_boards(self, id_)
+        if not result:
+            return result
+        if id_:
+            return self._add_default_debug_tools(result)
+        else:
+            for key, value in result.items():
+                result[key] = self._add_default_debug_tools(result[key])
+        return result
+
+    def _add_default_debug_tools(self, board):
+        debug = board.manifest.get("debug", {})
+
+        upload_protocols = board.manifest.get("upload", {}).get(
+            "protocols", [])
+        if "tools" not in debug:
+            debug['tools'] = {}
+
+        # Only FTDI based debug probes
+        for link in ("olimex-arm-usb-tiny-h", "olimex-arm-usb-ocd-h"):
+            if link not in upload_protocols or link in debug['tools']:
+                continue
+
+            server_args = [
+                "-s", "$PACKAGE_DIR/share/openocd/scripts",
+                "-f", "share/openocd/scripts/interface/ftdi/%s.cfg" % link,
+                "-f", "share/openocd/scripts/board/%s" % debug.get("openocd_board")
+            ]
+
+            debug['tools'][link] = {
+                "server": {
+                    "package": "tool-openocd-esp32",
+                    "executable": "bin/openocd",
+                    "arguments": server_args
+                },
+                "init_break": "thb app_main",
+                "init_cmds": [
+                    "define pio_reset_halt_target",
+                    "   mon reset halt",
+                    "   x $a1=0",
+                    "end",
+                    "define pio_reset_target",
+                    "   mon reset",
+                    "end",
+                    "target extended-remote $DEBUG_PORT",
+                    "$INIT_BREAK",
+                    "mon reset halt",
+                    "$LOAD_CMD",
+                    "pio_reset_halt_target",
+                    "continue"
+                ],
+                "load_cmd": 'mon program_esp32 "$PROG_DIR/firmware.bin" 0x10000 verify'
+            }
+
+        board.manifest['debug'] = debug
+        return board
